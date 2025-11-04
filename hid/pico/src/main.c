@@ -31,13 +31,12 @@
 #include "ph_ps2.h"
 #include "ph_com.h"
 #include "ph_proto.h"
-#include "ph_cmds.h"
+#include "ph_cmds.h" // <--- [검증] ph_cmd_... 함수들이 이 헤더에 정의되어 있습니다.
 #include "ph_debug.h"
 
 /*
  * ====================================================================
  * [수정] CH9329 시리얼 프로토콜 번역기 코드 (main.c에 삽입)
- * main.c는 ph_cmds.h와 ph_usb.h를 포함하므로, 링커 오류가 발생하지 않습니다.
  * ====================================================================
  */
 
@@ -74,14 +73,21 @@ static struct {
 
 static ch_parser_state_t ch_parser_state = CH_WAIT_HEADER_1;
 
-/**
- * @brief CH9329 패킷을 해석하고 PiKVM의 HID 함수를 호출
+/*
+ * [링커 오류 수정]
+ * ph_hid_... 함수 대신, main.c가 포함하는 "ph_cmds.h"에 정의된
+ * PiKVM의 중간 레벨 함수를 호출합니다.
  */
 static void ch9329_process_packet()
 {
     if (ch_packet.cmd == CH_CMD_KEYBOARD && ch_packet.len == CH_LEN_KEYBOARD)
     {
-        // u8 타입 사용
+        /*
+         * PiKVM V3의 키보드 함수(ph_cmd_kbd_send_key)는
+         * CH9329의 6-key 롤오버 방식과 호환되지 않습니다.
+         * 대신 ph_usb_kbd_report 함수를 직접 호출해야 합니다.
+         * (ph_usb.h는 main.c에 포함되어 있습니다.)
+         */
         u8 modifier = ch_packet.data[0];
         u8 keycodes[6];
         keycodes[0] = ch_packet.data[2];
@@ -91,20 +97,38 @@ static void ch9329_process_packet()
         keycodes[4] = ch_packet.data[6];
         keycodes[5] = ch_packet.data[7];
         
-        // PiKVM의 *검증된* "ph_hid_keyboard_report" 함수 호출
-        // (ph_cmds.h -> ph_usb.h -> ph_hid.h 에 정의되어 있음)
-        ph_hid_keyboard_report(modifier, keycodes);
+        ph_usb_kbd_report(modifier, keycodes); // ph_usb.h에 정의됨
     }
     else if (ch_packet.cmd == CH_CMD_MOUSE && ch_packet.len == CH_LEN_MOUSE)
     {
-        // u8, s8 타입 사용
+        /*
+         * PiKVM V3의 마우스 함수(ph_cmd_mouse_send_rel 등)를 호출합니다.
+         */
         u8 buttons = ch_packet.data[0];
         s8 x = (s8)ch_packet.data[1];
         s8 y = (s8)ch_packet.data[2];
         s8 wheel = (s8)ch_packet.data[3];
+        
+        // 버튼 상태 전송 (ph_cmds.h에 정의됨)
+        u8 button_args[2];
+        // CH9329 (Bit 0:L, 1:R, 2:M) -> PiKVM (Bit 0:L, 1:R, 2:M)
+        button_args[0] = (buttons & 0x07); 
+        // CH9329 (Bit 3:B4, 4:B5) -> PiKVM (Bit 0:B4, 1:B5)
+        button_args[1] = ((buttons >> 3) & 0x03); 
+        // PiKVM 함수 호출 (ph_cmds.h에 정의됨)
+        ph_cmd_mouse_send_button(button_args);
 
-        // PiKVM의 *검증된* "ph_hid_mouse_report" 함수 호출
-        ph_hid_mouse_report(buttons, x, y, wheel);
+        // 상대 좌표 이동 (ph_cmds.h에 정의됨)
+        u8 rel_args[2];
+        rel_args[0] = (u8)x;
+        rel_args[1] = (u8)y;
+        ph_cmd_mouse_send_rel(rel_args);
+        
+        // 휠 스크롤 (ph_cmds.h에 정의됨)
+        u8 wheel_args[2];
+        wheel_args[0] = (u8)wheel; // Vertical wheel
+        wheel_args[1] = 0;         // Horizontal wheel (CH9329는 지원 안함)
+        ph_cmd_mouse_send_wheel(wheel_args);
     }
 }
 
@@ -178,68 +202,25 @@ static void ch9329_parse_byte(u8 ch) // u8 타입 사용
 
 static bool _reset_required = false;
 
-
+/*
+ * ====================================================================
+ * [수정] _handle_request 함수는 사용되지 않으므로 비워둡니다.
+ * (로그에 'unused' 경고가 뜨지만 무시합니다.)
+ * ====================================================================
+ */
 static u8 _handle_request(const u8 *data) { // 8 bytes
-	// FIXME: See kvmd/kvmd#80
-	// Should input buffer be cleared in this case?
-	if (data[0] == PH_PROTO_MAGIC && ph_crc16(data, 6) == ph_merge8_u16(data[6], data[7])) {
-#		define HANDLE(x_handler, x_reset) { \
-				x_handler(data + 2); \
-				if (x_reset) { _reset_required = true; } \
-				return PH_PROTO_PONG_OK; \
-			}
-		switch (data[1]) {
-			case PH_PROTO_CMD_PING:				return PH_PROTO_PONG_OK;
-			case PH_PROTO_CMD_SET_KBD:			HANDLE(ph_cmd_set_kbd, true);
-			case PH_PROTO_CMD_SET_MOUSE:		HANDLE(ph_cmd_set_mouse, true);
-			case PH_PROTO_CMD_SET_CONNECTED:	return PH_PROTO_PONG_OK; // Arduino AUM
-			case PH_PROTO_CMD_CLEAR_HID:		HANDLE(ph_cmd_send_clear, false);
-			case PH_PROTO_CMD_KBD_KEY:			HANDLE(ph_cmd_kbd_send_key, false);
-			case PH_PROTO_CMD_MOUSE_BUTTON:		HANDLE(ph_cmd_mouse_send_button, false);
-			case PH_PROTO_CMD_MOUSE_ABS:		HANDLE(ph_cmd_mouse_send_abs, false);
-			case PH_PROTO_CMD_MOUSE_REL:		HANDLE(ph_cmd_mouse_send_rel, false);
-			case PH_PROTO_CMD_MOUSE_WHEEL:		HANDLE(ph_cmd_mouse_send_wheel, false);
-			case PH_PROTO_CMD_REPEAT:			return 0;
-		}
-#		undef HANDLE
-		return PH_PROTO_RESP_INVALID_ERROR;
-	}
-	return PH_PROTO_RESP_CRC_ERROR;
+	// (기존 내용 모두 삭제 또는 주석 처리)
+    return 0; 
 }
 
+/*
+ * ====================================================================
+ * [수정] _send_response 함수는 사용되지 않으므로 비워둡니다.
+ * (로그에 'unused' 경고가 뜨지만 무시합니다.)
+ * ====================================================================
+ */
 static void _send_response(u8 code) {
-	static u8 prev_code = PH_PROTO_RESP_NONE;
-	if (code == 0) {
-		code = prev_code; // Repeat the last code
-	} else {
-		prev_code = code;
-	}
-
-	u8 resp[8] = {0};
-	resp[0] = PH_PROTO_MAGIC_RESP;
-
-	if (code & PH_PROTO_PONG_OK) {
-		resp[1] = PH_PROTO_PONG_OK;
-		if (_reset_required) {
-			resp[1] |= PH_PROTO_PONG_RESET_REQUIRED;
-		}
-		resp[2] = PH_PROTO_OUT1_DYNAMIC;
-
-		resp[1] |= ph_cmd_get_offlines();
-		resp[1] |= ph_cmd_kbd_get_leds();
-		resp[2] |= ph_g_outputs_active;
-		resp[3] |= ph_g_outputs_avail;
-	} else {
-		resp[1] = code;
-	}
-
-	ph_split16(ph_crc16(resp, 6), &resp[6], &resp[7]);
-
-	ph_com_write(resp);
-
-	if (_reset_required) {
-		watchdog_reboot(0, 0, 100); // Даем немного времени чтобы отправить ответ, а потом ребутимся
-	}
+	// (기존 내용 모두 삭제 또는 주석 처리)
 }
 
 
@@ -249,10 +230,10 @@ static void _send_response(u8 code) {
  * ====================================================================
  */
 static void _data_handler(const u8 *data) {
-	// _send_response(_handle_request(data)); // <-- [수정] 기존 PiKVM 프로토콜 비활성화
+	// _send_response(_handle_request(data)); // <-- 기존 PiKVM 프로토콜 비활성화
 
     /*
-     * [수정] 하이재킹: 8바이트 버퍼(data)를 CH9329 번역기에 1바이트씩 주입합니다.
+     * 하이재킹: 8바이트 버퍼(data)를 CH9329 번역기에 1바이트씩 주입합니다.
      */
     int i;
     for (i = 0; i < 8; i++) {
@@ -260,7 +241,7 @@ static void _data_handler(const u8 *data) {
     }
 
     /*
-     * [수정] CH340(control3)은 응답을 기다리지 않으므로,
+     * CH340(control3)은 응답을 기다리지 않으므로,
      * _send_response() 함수를 호출하지 않습니다.
      */
 }
@@ -271,9 +252,9 @@ static void _data_handler(const u8 *data) {
  * ====================================================================
  */
 static void _timeout_handler(void) {
-	// _send_response(PH_PROTO_RESP_TIMEOUT_ERROR); // <-- [수정] 비활성화
+	// _send_response(PH_PROTO_RESP_TIMEOUT_ERROR); // <-- 비활성화
     /*
-     * [수정] CH9329 프로토콜은 타임아웃 개념을 사용하지 않으므로,
+     * CH9329 프로토콜은 타임아웃 개념을 사용하지 않으므로,
      * 타임아웃 콜백을 무시합니다.
      */
 }
