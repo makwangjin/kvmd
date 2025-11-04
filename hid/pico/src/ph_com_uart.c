@@ -1,21 +1,21 @@
 /*****************************************************************************
 #                                                                            #
-#    KVMD - The main PiKVM daemon.                                           #
+#   KVMD - The main PiKVM daemon.                                            #
 #                                                                            #
-#    Copyright (C) 2018-2024  Maxim Devaev <mdevaev@gmail.com>               #
+#   Copyright (C) 2018-2024  Maxim Devaev <mdevaev@gmail.com>                #
 #                                                                            #
-#    This program is free software: you can redistribute it and/or modify    #
-#    it under the terms of the GNU General Public License as published by    #
-#    the Free Software Foundation, either version 3 of the License, or       #
-#    (at your option) any later version.                                     #
+#   This program is free software: you can redistribute it and/or modify     #
+#   it under the terms of the GNU General Public License as published by     #
+#   the Free Software Foundation, either version 3 of the License, or        #
+#   (at your option) any later version.                                      #
 #                                                                            #
-#    This program is distributed in the hope that it will be useful,         #
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of          #
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
-#    GNU General Public License for more details.                            #
+#   This program is distributed in the hope that it will be useful,          #
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of           #
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the            #
+#   GNU General Public License for more details.                             #
 #                                                                            #
-#    You should have received a copy of the GNU General Public License       #
-#    along with this program.  If not, see <https://www.gnu.org/licenses/>.  #
+#   You should have received a copy of the GNU General Public License        #
+#   along with this program.  If not, see <https://www.gnu.org/licenses/>.   #
 #                                                                            #
 *****************************************************************************/
 
@@ -27,7 +27,7 @@
 #include "hardware/uart.h"
 
 #include "ph_types.h"
-#include "ph_hid.h"
+#include "ph_hid.h" // KVM 엔진(키보드/마우스 함수)을 불러옵니다.
 
 
 /*
@@ -103,7 +103,10 @@ static void ch9329_process_packet()
  */
 static void ch9329_parse_byte(uint8_t ch)
 {
+    // C89 표준을 준수하기 위해 변수를 함수 맨 위에 선언합니다.
     uint8_t calculated_checksum = 0;
+    int i = 0; // <--- [오류 수정] 'i' 변수를 여기서 선언
+
     switch (ch_parser_state)
     {
         case CH_WAIT_HEADER_1:
@@ -141,9 +144,12 @@ static void ch9329_parse_byte(uint8_t ch)
             ch_packet.checksum = ch;
             calculated_checksum = CH_HEADER_1 + CH_HEADER_2 + CH_CMD_TYPE + 
                                   ch_packet.cmd + ch_packet.len;
-            for (int i = 0; i < ch_packet.len; i++) {
+            
+            // <--- [오류 수정] 'int i' 대신 'i' 사용
+            for (i = 0; i < ch_packet.len; i++) {
                 calculated_checksum += ch_packet.data[i];
             }
+
             if ((uint8_t)calculated_checksum == ch_packet.checksum) {
                 ch9329_process_packet();
             }
@@ -160,9 +166,7 @@ static void ch9329_parse_byte(uint8_t ch)
  * ====================================================================
  */
 
-
-
-
+// --- PiKVM V3의 기존 코드 시작 ---
 
 #define _BUS		uart1
 #define _SPEED		115200
@@ -171,17 +175,19 @@ static void ch9329_parse_byte(uint8_t ch)
 #define _TIMEOUT_US	100000
 
 
+// --- 이 변수들은 더 이상 사용되지 않지만, 다른 파일에서 참조할 수 있으므로 삭제하지 않습니다. ---
 static u8 _buf[8] = {0};
 static u8 _index = 0;
 static u64 _last_ts = 0;
-
 static void (*_data_cb)(const u8 *) = NULL;
 static void (*_timeout_cb)(void) = NULL;
+// -------------------------------------------------------------------
 
 
 void ph_com_uart_init(void (*data_cb)(const u8 *), void (*timeout_cb)(void)) {
-	// _data_cb = data_cb; // <-- 우리는 PiKVM의 8바이트 콜백을 쓰지 않습니다.
-	// _timeout_cb = timeout_cb; // <-- 타임아웃 콜백도 쓰지 않습니다.
+	// 기존 PiKVM V3의 8바이트 콜백은 사용하지 않습니다.
+	// _data_cb = data_cb;
+	// _timeout_cb = timeout_cb;
 
     // CH9329 번역기를 초기화합니다.
     ch_parser_state = CH_WAIT_HEADER_1;
@@ -200,13 +206,12 @@ void ph_com_uart_task(void) {
         ch9329_parse_byte(ch); // <--- 우리가 추가한 "번역기" 함수 호출
 	}
     
-    // 타임아웃 로직(_index > 0 ...)은 CH9329 파서에 포함되어 있으므로 삭제합니다.
+    // 기존 타임아웃 로직(_index > 0 ...)은 CH9329 파서에 포함되어 있으므로 삭제합니다.
 }
 
 
 
 void ph_com_uart_write(const u8 *data) {
+    // 이 함수는 사용되지 않지만, 그대로 둡니다.
 	uart_write_blocking(_BUS, data, 8);
 }
-
-#2025/11/04
