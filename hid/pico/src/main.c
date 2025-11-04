@@ -31,7 +31,7 @@
 #include "ph_ps2.h"
 #include "ph_com.h"
 #include "ph_proto.h"
-#include "ph_cmds.h" // <--- [검증] ph_cmd_... 함수들이 이 헤더에 정의되어 있습니다.
+#include "ph_cmds.h"
 #include "ph_debug.h"
 
 /*
@@ -73,58 +73,107 @@ static struct {
 
 static ch_parser_state_t ch_parser_state = CH_WAIT_HEADER_1;
 
-/*
- * [링커 오류 수정]
- * ph_hid_... 함수 대신, main.c가 포함하는 "ph_cmds.h"에 정의된
- * PiKVM의 중간 레벨 함수를 호출합니다.
+// [링커 오류 수정] 키보드 상태 저장을 위한 변수 추가
+static u8 ch_kbd_modifier = 0;
+static u8 ch_kbd_keycodes[6] = {0};
+
+/**
+ * @brief 6-Key 롤오버(CH9329)를 1-Key 이벤트(PiKVM)로 변환
+ */
+static void ch9329_process_keyboard_state(u8 new_modifier, u8 new_keycodes[6])
+{
+    int i, j;
+    bool found;
+
+    // 1. 모디파이어 키 처리
+    if (ch_kbd_modifier != new_modifier) {
+        // (간결성을 위해 모디파이어 키의 개별 Press/Release는 생략합니다.
+        // PiKVM의 ph_cmd_kbd_send_key는 모디파이어를 다루지 않습니다.)
+        ch_kbd_modifier = new_modifier;
+    }
+
+    // 2. 키 떼기 (Release) 이벤트 전송
+    // (이전 리포트에는 있었지만, 새 리포트에는 없는 키를 찾습니다)
+    for (i = 0; i < 6; i++) {
+        if (ch_kbd_keycodes[i] == 0) continue; // 이전 키가 비어있으면 스킵
+        
+        found = false;
+        for (j = 0; j < 6; j++) {
+            if (ch_kbd_keycodes[i] == new_keycodes[j]) {
+                found = true;
+                break;
+            }
+        }
+        
+        if (!found) {
+            // 이 키(ch_kbd_keycodes[i])를 떼었습니다.
+            u8 args[2];
+            args[0] = ch_kbd_keycodes[i];
+            args[1] = 0; // 0 = Release
+            ph_cmd_kbd_send_key(args);
+        }
+    }
+
+    // 3. 키 누름 (Press) 이벤트 전송
+    // (새 리포트에는 있지만, 이전 리포트에는 없던 키를 찾습니다)
+    for (i = 0; i < 6; i++) {
+        if (new_keycodes[i] == 0) continue; // 새 키가 비어있으면 스킵
+        
+        found = false;
+        for (j = 0; j < 6; j++) {
+            if (new_keycodes[i] == ch_kbd_keycodes[j]) {
+                found = true;
+                break;
+            }
+        }
+        
+        if (!found) {
+            // 이 키(new_keycodes[i])를 눌렀습니다.
+            u8 args[2];
+            args[0] = new_keycodes[i];
+            args[1] = 1; // 1 = Press
+            ph_cmd_kbd_send_key(args);
+        }
+    }
+
+    // 4. 현재 상태를 이전 상태로 저장
+    for (i = 0; i < 6; i++) {
+        ch_kbd_keycodes[i] = new_keycodes[i];
+    }
+}
+
+
+/**
+ * @brief CH9329 패킷을 해석하고 PiKVM의 HID 함수를 호출
  */
 static void ch9329_process_packet()
 {
     if (ch_packet.cmd == CH_CMD_KEYBOARD && ch_packet.len == CH_LEN_KEYBOARD)
     {
-        /*
-         * PiKVM V3의 키보드 함수(ph_cmd_kbd_send_key)는
-         * CH9329의 6-key 롤오버 방식과 호환되지 않습니다.
-         * 대신 ph_usb_kbd_report 함수를 직접 호출해야 합니다.
-         * (ph_usb.h는 main.c에 포함되어 있습니다.)
-         */
+        // [링커 오류 수정]
+        // 6KRO 리포트를 1-Key 이벤트로 변환하는 새 함수 호출
         u8 modifier = ch_packet.data[0];
-        u8 keycodes[6];
-        keycodes[0] = ch_packet.data[2];
-        keycodes[1] = ch_packet.data[3];
-        keycodes[2] = ch_packet.data[4];
-        keycodes[3] = ch_packet.data[5];
-        keycodes[4] = ch_packet.data[6];
-        keycodes[5] = ch_packet.data[7];
-        
-        ph_usb_kbd_report(modifier, keycodes); // ph_usb.h에 정의됨
+        u8* keycodes = &ch_packet.data[2]; // data[2]~[7]
+        ch9329_process_keyboard_state(modifier, keycodes);
     }
     else if (ch_packet.cmd == CH_CMD_MOUSE && ch_packet.len == CH_LEN_MOUSE)
     {
-        /*
-         * PiKVM V3의 마우스 함수(ph_cmd_mouse_send_rel 등)를 호출합니다.
-         */
+        // 마우스 로직은 링커 오류가 없었으므로 10차 수정안과 동일
         u8 buttons = ch_packet.data[0];
         s8 x = (s8)ch_packet.data[1];
         s8 y = (s8)ch_packet.data[2];
         s8 wheel = (s8)ch_packet.data[3];
         
-        // 버튼 상태 전송 (ph_cmds.h에 정의됨)
         u8 button_args[2];
-        // CH9329 (Bit 0:L, 1:R, 2:M) -> PiKVM (Bit 0:L, 1:R, 2:M)
         button_args[0] = (buttons & 0x07); 
-        // CH9329 (Bit 3:B4, 4:B5) -> PiKVM (Bit 0:B4, 1:B5)
         button_args[1] = ((buttons >> 3) & 0x03); 
-        // PiKVM 함수 호출 (ph_cmds.h에 정의됨)
         ph_cmd_mouse_send_button(button_args);
 
-        // 상대 좌표 이동 (ph_cmds.h에 정의됨)
         u8 rel_args[2];
         rel_args[0] = (u8)x;
         rel_args[1] = (u8)y;
         ph_cmd_mouse_send_rel(rel_args);
         
-        // 휠 스크롤 (ph_cmds.h에 정의됨)
         u8 wheel_args[2];
         wheel_args[0] = (u8)wheel; // Vertical wheel
         wheel_args[1] = 0;         // Horizontal wheel (CH9329는 지원 안함)
@@ -239,11 +288,6 @@ static void _data_handler(const u8 *data) {
     for (i = 0; i < 8; i++) {
         ch9329_parse_byte(data[i]);
     }
-
-    /*
-     * CH340(control3)은 응답을 기다리지 않으므로,
-     * _send_response() 함수를 호출하지 않습니다.
-     */
 }
 
 /*
@@ -253,10 +297,6 @@ static void _data_handler(const u8 *data) {
  */
 static void _timeout_handler(void) {
 	// _send_response(PH_PROTO_RESP_TIMEOUT_ERROR); // <-- 비활성화
-    /*
-     * CH9329 프로토콜은 타임아웃 개념을 사용하지 않으므로,
-     * 타임아웃 콜백을 무시합니다.
-     */
 }
 
 
@@ -265,10 +305,14 @@ int main(void) {
 	//ph_debug_uart_init();
 	ph_outputs_init();
 	ph_ps2_init();
-	ph_usb_init(); // Тут может быть инициализация USB-CDC для бриджа
+	ph_usb_init();
 	
     // [수정] CH9329 파서 초기화 코드를 ph_com_init 전에 추가합니다.
     ch_parser_state = CH_WAIT_HEADER_1;
+    // [수정] CH9329 키보드 상태 초기화
+    ch_kbd_modifier = 0;
+    for(int i=0; i<6; i++) { ch_kbd_keycodes[i] = 0; }
+
 
     ph_com_init(_data_handler, _timeout_handler);
 
