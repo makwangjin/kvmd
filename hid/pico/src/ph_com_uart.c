@@ -20,14 +20,17 @@
 *****************************************************************************/
 
 
+/*
+ * ====================================================================
+ * [수정] 원본 PiKVM 헤더파일을 모두 포함합니다.
+ * ====================================================================
+ */
 #include "ph_com_uart.h"
-
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/uart.h"
-
-#include "ph_types.h"
-#include "ph_hid.h" // KVM 엔진(키보드/마우스 함수)을 불러옵니다.
+#include "ph_types.h" // u8, s8 타입을 사용하기 위해 포함
+#include "ph_hid.h"   // KVM 엔진(키보드/마우스 함수)을 불러옵니다.
 
 
 /*
@@ -58,13 +61,13 @@ typedef enum {
     CH_WAIT_CHECKSUM
 } ch_parser_state_t;
 
-// CH9329 패킷 구조체 정의
+// CH9329 패킷 구조체 정의 (u8 타입 사용)
 static struct {
-    uint8_t cmd;
-    uint8_t len;
-    uint8_t data[8]; // 최대 8바이트 (키보드 기준)
-    uint8_t checksum;
-    uint8_t data_index;
+    u8 cmd;
+    u8 len;
+    u8 data[8]; // 최대 8바이트 (키보드 기준)
+    u8 checksum;
+    u8 data_index;
 } ch_packet;
 
 static ch_parser_state_t ch_parser_state = CH_WAIT_HEADER_1;
@@ -76,8 +79,9 @@ static void ch9329_process_packet()
 {
     if (ch_packet.cmd == CH_CMD_KEYBOARD && ch_packet.len == CH_LEN_KEYBOARD)
     {
-        uint8_t modifier = ch_packet.data[0];
-        uint8_t keycodes[6];
+        // u8 타입 사용
+        u8 modifier = ch_packet.data[0];
+        u8 keycodes[6];
         keycodes[0] = ch_packet.data[2];
         keycodes[1] = ch_packet.data[3];
         keycodes[2] = ch_packet.data[4];
@@ -89,10 +93,11 @@ static void ch9329_process_packet()
     }
     else if (ch_packet.cmd == CH_CMD_MOUSE && ch_packet.len == CH_LEN_MOUSE)
     {
-        uint8_t buttons = ch_packet.data[0];
-        int8_t x = (int8_t)ch_packet.data[1];
-        int8_t y = (int8_t)ch_packet.data[2];
-        int8_t wheel = (int8_t)ch_packet.data[3];
+        // u8, s8 타입 사용
+        u8 buttons = ch_packet.data[0];
+        s8 x = (s8)ch_packet.data[1];
+        s8 y = (s8)ch_packet.data[2];
+        s8 wheel = (s8)ch_packet.data[3];
         // PiKVM의 *검증된* 마우스 함수 호출
         hid_mouse_report(buttons, x, y, wheel);
     }
@@ -101,11 +106,11 @@ static void ch9329_process_packet()
 /**
  * @brief UART에서 1바이트를 읽어 CH9329 상태 머신을 실행
  */
-static void ch9329_parse_byte(uint8_t ch)
+static void ch9329_parse_byte(u8 ch) // u8 타입 사용
 {
     // C89 표준을 준수하기 위해 변수를 함수 맨 위에 선언합니다.
-    uint8_t calculated_checksum = 0;
-    int i = 0; // <--- [오류 수정] 'i' 변수를 여기서 선언
+    u8 calculated_checksum = 0; // u8 타입 사용
+    int i = 0; 
 
     switch (ch_parser_state)
     {
@@ -145,12 +150,11 @@ static void ch9329_parse_byte(uint8_t ch)
             calculated_checksum = CH_HEADER_1 + CH_HEADER_2 + CH_CMD_TYPE + 
                                   ch_packet.cmd + ch_packet.len;
             
-            // <--- [오류 수정] 'int i' 대신 'i' 사용
             for (i = 0; i < ch_packet.len; i++) {
                 calculated_checksum += ch_packet.data[i];
             }
 
-            if ((uint8_t)calculated_checksum == ch_packet.checksum) {
+            if ((u8)calculated_checksum == ch_packet.checksum) { // u8 타입 사용
                 ch9329_process_packet();
             }
             ch_parser_state = CH_WAIT_HEADER_1; 
@@ -175,7 +179,7 @@ static void ch9329_parse_byte(uint8_t ch)
 #define _TIMEOUT_US	100000
 
 
-// --- 이 변수들은 더 이상 사용되지 않지만, 다른 파일에서 참조할 수 있으므로 삭제하지 않습니다. ---
+// --- 이 변수들은 더 이상 사용되지 않으므로 삭제하지 않습니다. ---
 static u8 _buf[8] = {0};
 static u8 _index = 0;
 static u64 _last_ts = 0;
@@ -184,11 +188,12 @@ static void (*_timeout_cb)(void) = NULL;
 // -------------------------------------------------------------------
 
 
+/*
+ * ====================================================================
+ * [수정] PiKVM V3의 init 함수를 하이재킹합니다.
+ * ====================================================================
+ */
 void ph_com_uart_init(void (*data_cb)(const u8 *), void (*timeout_cb)(void)) {
-	// 기존 PiKVM V3의 8바이트 콜백은 사용하지 않습니다.
-	// _data_cb = data_cb;
-	// _timeout_cb = timeout_cb;
-
     // CH9329 번역기를 초기화합니다.
     ch_parser_state = CH_WAIT_HEADER_1;
 	
@@ -199,19 +204,25 @@ void ph_com_uart_init(void (*data_cb)(const u8 *), void (*timeout_cb)(void)) {
 }
 
 
+/*
+ * ====================================================================
+ * [수정] PiKVM V3의 task 함수를 하이재킹합니다.
+ * ====================================================================
+ */
 void ph_com_uart_task(void) {
-	// 기존 8바이트 고정 패킷 로직을 CH9329 파서로 대체합니다.
+    // UART로 들어오는 모든 바이트를 CH9329 파서로 보냅니다.
     if (uart_is_readable(_BUS)) {
-		uint8_t ch = (u8)uart_getc(_BUS);
+		u8 ch = (u8)uart_getc(_BUS); // u8 타입 사용
         ch9329_parse_byte(ch); // <--- 우리가 추가한 "번역기" 함수 호출
 	}
-    
-    // 기존 타임아웃 로직(_index > 0 ...)은 CH9329 파서에 포함되어 있으므로 삭제합니다.
 }
 
 
-
+/*
+ * =G==================================================================
+ * [수정 없음] 이 함수는 사용되지 않지만, 그대로 둡니다.
+ * ====================================================================
+ */
 void ph_com_uart_write(const u8 *data) {
-    // 이 함수는 사용되지 않지만, 그대로 둡니다.
 	uart_write_blocking(_BUS, data, 8);
 }
