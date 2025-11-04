@@ -30,17 +30,16 @@
 #include "hardware/gpio.h"
 #include "hardware/uart.h"
 #include "ph_types.h" // u8, s8 타입을 사용하기 위해 포함
-// #include "ph_hid.h" // <--- [오류 수정] 이 파일을 포함하지 않습니다.
+// #include "ph_hid.h" // 포함하지 않습니다.
 
 
 /*
  * ====================================================================
- * [오류 수정] ph_hid.h 대신, KVM 엔진 함수를 직접 선언(extern)합니다.
- * 컴파일러에게 "이 함수들은 다른 파일에 있으니 믿고 넘어가"라고 알려줍니다.
+ * [오류 수정] PiKVM의 KVM 엔진 함수를 "ph_" 접두사를 붙여 정확하게 선언합니다.
  * ====================================================================
  */
-extern void hid_keyboard_report(u8 modifier, u8 keycode[6]);
-extern void hid_mouse_report(u8 buttons, s8 x, s8 y, s8 wheel);
+extern void ph_hid_keyboard_report(u8 modifier, u8 keycode[6]);
+extern void ph_hid_mouse_report(u8 buttons, s8 x, s8 y, s8 wheel);
 
 
 /*
@@ -98,8 +97,9 @@ static void ch9329_process_packet()
         keycodes[3] = ch_packet.data[5];
         keycodes[4] = ch_packet.data[6];
         keycodes[5] = ch_packet.data[7];
-        // PiKVM의 *검증된* 키보드 함수 호출 (extern으로 선언됨)
-        hid_keyboard_report(modifier, keycodes);
+        
+        // [오류 수정] PiKVM의 *검증된* "ph_hid_keyboard_report" 함수 호출
+        ph_hid_keyboard_report(modifier, keycodes);
     }
     else if (ch_packet.cmd == CH_CMD_MOUSE && ch_packet.len == CH_LEN_MOUSE)
     {
@@ -108,8 +108,9 @@ static void ch9329_process_packet()
         s8 x = (s8)ch_packet.data[1];
         s8 y = (s8)ch_packet.data[2];
         s8 wheel = (s8)ch_packet.data[3];
-        // PiKVM의 *검증된* 마우스 함수 호출 (extern으로 선언됨)
-        hid_mouse_report(buttons, x, y, wheel);
+
+        // [오류 수정] PiKVM의 *검증된* "ph_hid_mouse_report" 함수 호출
+        ph_hid_mouse_report(buttons, x, y, wheel);
     }
 }
 
@@ -189,7 +190,7 @@ static void ch9329_parse_byte(u8 ch) // u8 타입 사용
 #define _TIMEOUT_US	100000
 
 
-// --- 이 변수들은 더 이상 사용되지 않으므로 삭제하지 않습니다. ---
+// --- 이 변수들은 더 이상 사용되지 않으므로 (경고가 발생하지만) 삭제하지 않습니다. ---
 static u8 _buf[8] = {0};
 static u8 _index = 0;
 static u64 _last_ts = 0;
