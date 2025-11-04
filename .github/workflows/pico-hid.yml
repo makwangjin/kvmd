@@ -19,7 +19,7 @@ jobs:
       - name: Running tests ...
         run: make -C hid/pico all
 
-- name: Upload firmware artifact
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: pico-firmware
