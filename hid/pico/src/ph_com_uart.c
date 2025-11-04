@@ -22,7 +22,7 @@
 
 /*
  * ====================================================================
- * [수정] 원본 PiKVM 헤더파일을 모두 포함합니다.
+ * [수정] 원본 PiKVM 헤더파일을 포함합니다.
  * ====================================================================
  */
 #include "ph_com_uart.h"
@@ -30,7 +30,17 @@
 #include "hardware/gpio.h"
 #include "hardware/uart.h"
 #include "ph_types.h" // u8, s8 타입을 사용하기 위해 포함
-#include "ph_hid.h"   // KVM 엔진(키보드/마우스 함수)을 불러옵니다.
+// #include "ph_hid.h" // <--- [오류 수정] 이 파일을 포함하지 않습니다.
+
+
+/*
+ * ====================================================================
+ * [오류 수정] ph_hid.h 대신, KVM 엔진 함수를 직접 선언(extern)합니다.
+ * 컴파일러에게 "이 함수들은 다른 파일에 있으니 믿고 넘어가"라고 알려줍니다.
+ * ====================================================================
+ */
+extern void hid_keyboard_report(u8 modifier, u8 keycode[6]);
+extern void hid_mouse_report(u8 buttons, s8 x, s8 y, s8 wheel);
 
 
 /*
@@ -88,7 +98,7 @@ static void ch9329_process_packet()
         keycodes[3] = ch_packet.data[5];
         keycodes[4] = ch_packet.data[6];
         keycodes[5] = ch_packet.data[7];
-        // PiKVM의 *검증된* 키보드 함수 호출
+        // PiKVM의 *검증된* 키보드 함수 호출 (extern으로 선언됨)
         hid_keyboard_report(modifier, keycodes);
     }
     else if (ch_packet.cmd == CH_CMD_MOUSE && ch_packet.len == CH_LEN_MOUSE)
@@ -98,7 +108,7 @@ static void ch9329_process_packet()
         s8 x = (s8)ch_packet.data[1];
         s8 y = (s8)ch_packet.data[2];
         s8 wheel = (s8)ch_packet.data[3];
-        // PiKVM의 *검증된* 마우스 함수 호출
+        // PiKVM의 *검증된* 마우스 함수 호출 (extern으로 선언됨)
         hid_mouse_report(buttons, x, y, wheel);
     }
 }
@@ -219,9 +229,9 @@ void ph_com_uart_task(void) {
 
 
 /*
- * =G==================================================================
+ * ===================================================================
  * [수정 없음] 이 함수는 사용되지 않지만, 그대로 둡니다.
- * ====================================================================
+ * ===================================================================
  */
 void ph_com_uart_write(const u8 *data) {
 	uart_write_blocking(_BUS, data, 8);
